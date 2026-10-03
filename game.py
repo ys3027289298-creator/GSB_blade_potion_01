@@ -21,6 +21,10 @@ class Character:
     def is_alive(self):
         return self.hp > 0
 
+    def reset(self):
+        # Restore to the state the object had at creation.
+        self.hp = self.max_hp
+
     def take_damage(self, damage):
         self.hp -= damage
         if self.hp < 0:   # prevent negative HP
@@ -33,23 +37,36 @@ class Player(Character):
         self.inventory = ["Potion", "Potion", "Potion"]  # start with 3 potions
         self.achievements = set()
 
+    def reset(self):
+        super().reset()
+        self.inventory = ["Potion", "Potion", "Potion"]
+        self.achievements = set()
+
     def heal(self):
-        if "Potion" in self.inventory:
-            self.hp += 20
-            if self.hp > self.max_hp:   # cap at current max HP
-                self.hp = self.max_hp
-            self.inventory.remove("Potion")
-            pause_print(
-                f"{self.name} drinks a potion and heals 20 HP! (HP: {self.hp})", 1
-            )
-            pause_print(
-                f"Remaining Potions: {self.inventory.count('Potion')}", 0.5
-            )
-        else:
+        if "Potion" not in self.inventory:
             pause_print("No potions left!", 0.5)
+            return
+        if self.hp >= self.max_hp:
+            # Full HP: roll back, do not consume the potion.
+            pause_print(f"{self.name} is already at full HP! No potion used.", 0.5)
+            return
+        self.hp += 20
+        if self.hp > self.max_hp:   # cap at current max HP
+            self.hp = self.max_hp
+        self.inventory.remove("Potion")
+        pause_print(
+            f"{self.name} drinks a potion and heals 20 HP! (HP: {self.hp})", 1
+        )
+        pause_print(
+            f"Remaining Potions: {self.inventory.count('Potion')}", 0.5
+        )
 
     def add_achievement(self, achievement):
+        # Idempotent: re-adding an unlocked achievement has no effect.
+        if achievement in self.achievements:
+            return False
         self.achievements.add(achievement)
+        return True
 
     def level_up(self):
         self.max_hp += 10
@@ -67,22 +84,38 @@ class Ally(Character):
         super().__init__(name, hp, attack)
 
     def assist(self, enemy):
+        if not self.is_alive():
+            pause_print(f"{self.name} is down and cannot assist!", 0.5)
+            return
         damage = random.randint(3, self.attack)
         pause_print(f"{self.name} assists and hits {enemy.name} for {damage}!", 1)
         enemy.take_damage(damage)
 
 # GamePlay Program
+def read_choice(valid, error_msg):
+    # Loop until a valid option is entered; return None on EOF (Ctrl-D /
+    # closed stdin) so callers can fall back to a safe default instead of
+    # crashing or spinning forever.
+    while True:
+        try:
+            choice = input("> ").strip().lower()
+        except EOFError:
+            return None
+        if choice in valid:
+            return choice
+        pause_print(error_msg, 0.5)
+
 def player_turn(player, enemy, ally):
     pause_print("\nChoose action:", 0.5)
     print("1. Attack")
     print("2. Heal (use potion)")
     print("3. Call Ally")
 
-    choice = ""
-    while choice not in ["1", "2", "3"]:
-        choice = input("> ").strip()
-        if choice not in ["1", "2", "3"]:
-            pause_print("Invalid choice! Please enter 1, 2, or 3.", 0.5)
+    choice = read_choice(
+        ["1", "2", "3"], "Invalid choice! Please enter 1, 2, or 3."
+    )
+    if choice is None:
+        choice = "1"  # EOF: default to attack so the round can resolve
 
     if choice == "1":
         damage = random.randint(5, player.attack)
@@ -96,15 +129,20 @@ def player_turn(player, enemy, ally):
 def battle(player, enemy, ally=None, is_final=False):
     pause_print(f"\n⚔️ Battle starts: {player.name} vs {enemy.name}!\n", 1.5)
 
+    if ally:
+        ally.reset()  # ally starts every battle fresh, no stacked state
+
     while player.is_alive() and enemy.is_alive():
         player_turn(player, enemy, ally)
 
-        if enemy.is_alive():
-            # Safe damage range
-            low = 1 if enemy.attack < 3 else 3
-            damage = random.randint(low, enemy.attack)
-            pause_print(f"{enemy.name} strikes back for {damage}!", 1)
-            player.take_damage(damage)
+        if not enemy.is_alive():
+            break  # a dead enemy never acts
+
+        # Safe damage range
+        low = 1 if enemy.attack < 3 else 3
+        damage = random.randint(low, enemy.attack)
+        pause_print(f"{enemy.name} strikes back for {damage}!", 1)
+        player.take_damage(damage)
 
     if player.is_alive():
         pause_print(f"\n✅ {player.name} defeated {enemy.name}!\n", 1.5)
@@ -159,11 +197,11 @@ def main():
 
         # Ask user if they want to continue
         pause_print("\nDo you want to play again? (y/n): ", 0.5)
-        choice = ""
-        while choice not in ["y", "n", "yes", "no"]:
-            choice = input("> ").strip().lower()
-            if choice not in ["y", "n", "yes", "no"]:
-                pause_print("Invalid choice! Please enter 'y' or 'n'.", 0.5)
+        choice = read_choice(
+            ["y", "n", "yes", "no"], "Invalid choice! Please enter 'y' or 'n'."
+        )
+        if choice is None:
+            choice = "n"  # EOF: quit gracefully instead of crashing
 
         if choice in ["n", "no"]:
             pause_print("\n👋 Thanks for playing! Goodbye!", 1)
